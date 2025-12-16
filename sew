@@ -7,100 +7,78 @@ local Camera = Workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
 local Mouse = LocalPlayer:GetMouse()
 
--- // ИСПРАВЛЕННАЯ ЗАГРУЗКА БИБЛИОТЕКИ //
--- Используем официальный репозиторий, чтобы избежать ошибок загрузки
+-- // ЗАГРУЗКА БИБЛИОТЕКИ (БЕЗОПАСНАЯ) //
 local success, WindUI = pcall(function()
     return loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/source.lua"))()
 end)
 
 if not success or not WindUI then
-    warn("Failed to load WindUI library! Check your internet or executor.")
+    warn("FATAL: Could not load WindUI. Check your executor or connection.")
     return
 end
 
--- // НАСТРОЙКИ (CONFIG) //
+-- // КОНФИГУРАЦИЯ //
 local Config = {
-    -- Aimbot
+    -- Aim
     AimEnabled = false,
-    AimKey = Enum.UserInputType.MouseButton2, -- ПКМ по умолчанию
+    AimKey = Enum.UserInputType.MouseButton2,
     AimPart = "Head",
     AimRadius = 150,
     AimSmoothness = 0.5,
     CheckWalls = true,
     CheckTeam = true,
-    
     -- Visuals
     FOVEnabled = true,
     FOVColor = Color3.fromRGB(255, 255, 255),
-    
     ESPEnabled = false,
-    ESPFillColor = Color3.fromRGB(255, 0, 0),
-    ESPOutlineColor = Color3.fromRGB(255, 255, 255),
-    ESPNames = false
+    ESPNames = false,
+    ESPFillColor = Color3.fromRGB(255, 105, 180),
+    ESPOutlineColor = Color3.fromRGB(255, 255, 255)
 }
 
 -- // ПЕРЕМЕННЫЕ ЛОГИКИ //
--- Используем pcall для Drawing.new на случай, если эксплойт его не поддерживает
-local drawingSuccess, FOVCircle = pcall(function()
-    local circle = Drawing.new("Circle")
-    circle.Thickness = 1.5
-    circle.NumSides = 60
-    circle.Filled = false
-    circle.Transparency = 1
-    return circle
+local FOVCircle = nil
+pcall(function()
+    FOVCircle = Drawing.new("Circle")
+    FOVCircle.Thickness = 1
+    FOVCircle.NumSides = 60
+    FOVCircle.Filled = false
+    FOVCircle.Transparency = 1
+    FOVCircle.Visible = false
 end)
 
-if not drawingSuccess then
-    warn("Drawing API not supported by your executor. FOV Circle will be disabled.")
-    Config.FOVEnabled = false
-end
-
-local AimTarget = nil
-local ESPContainer = {} 
+local ESPContainer = {}
+local isAiming = false
 
 -- // ФУНКЦИИ ЛОГИКИ //
 
--- 1. Проверка видимости
 local function IsVisible(targetPart)
     if not Config.CheckWalls then return true end
-    local origin = Camera.CFrame.Position
-    local direction = targetPart.Position - origin
     local rayParams = RaycastParams.new()
     rayParams.FilterDescendantsInstances = {LocalPlayer.Character, targetPart.Parent}
     rayParams.FilterType = Enum.RaycastFilterType.Exclude
-    rayParams.IgnoreWater = true
-
-    local result = Workspace:Raycast(origin, direction, rayParams)
+    local result = Workspace:Raycast(Camera.CFrame.Position, (targetPart.Position - Camera.CFrame.Position), rayParams)
     return result == nil
 end
 
--- 2. Поиск цели
-local function GetClosestPlayer()
+local function GetClosestTarget()
     local closest = nil
-    local minDistance = Config.AimRadius
-    
+    local shortestDist = Config.AimRadius
+
     for _, player in ipairs(Players:GetPlayers()) do
-        if player == LocalPlayer then continue end
-        if Config.CheckTeam and player.Team == LocalPlayer.Team then continue end
+        if player == LocalPlayer or (Config.CheckTeam and player.Team == LocalPlayer.Team) then continue end
         
         local char = player.Character
-        if not char then continue end
-        
-        local humanoid = char:FindFirstChild("Humanoid")
-        local rootPart = char:FindFirstChild("HumanoidRootPart")
-        local targetPart = char:FindFirstChild(Config.AimPart)
-        
-        if humanoid and humanoid.Health > 0 and rootPart and targetPart then
-            local screenPos, onScreen = Camera:WorldToScreenPoint(targetPart.Position)
-            
+        local part = char and char:FindFirstChild(Config.AimPart)
+        local hum = char and char:FindFirstChild("Humanoid")
+
+        if part and hum and hum.Health > 0 then
+            local pos, onScreen = Camera:WorldToScreenPoint(part.Position)
             if onScreen then
-                local mouseDist = (Vector2.new(Mouse.X, Mouse.Y) - Vector2.new(screenPos.X, screenPos.Y)).Magnitude
-                
-                if mouseDist < minDistance then
-                    if IsVisible(targetPart) then
-                        minDistance = mouseDist
-                        closest = targetPart
-                    end
+                local mouseDist = (Vector2.new(pos.X, pos.Y) - Vector2.new(Mouse.X, Mouse.Y)).Magnitude
+                if mouseDist < shortestDist and IsVisible(part) then
+                    shortestDist = mouseDist
+                    closest = part
                 end
             end
         end
@@ -108,7 +86,6 @@ local function GetClosestPlayer()
     return closest
 end
 
--- 3. ESP Логика
 local function UpdateESP()
     if not Config.ESPEnabled then
         for _, obj in pairs(ESPContainer) do
@@ -130,24 +107,19 @@ local function UpdateESP()
                 continue 
             end
 
-            if not ESPContainer[player] then
-                ESPContainer[player] = {}
-            end
-
             local char = player.Character
-            
+            if not ESPContainer[player] then ESPContainer[player] = {} end
+
             -- Highlight
             if not char:FindFirstChild("WindUI_Highlight") then
                 local hl = Instance.new("Highlight", char)
                 hl.Name = "WindUI_Highlight"
                 hl.FillTransparency = 0.5
-                hl.OutlineTransparency = 0
                 ESPContainer[player].Highlight = hl
-            else
-                local hl = char:FindFirstChild("WindUI_Highlight")
-                hl.FillColor = Config.ESPFillColor
-                hl.OutlineColor = Config.ESPOutlineColor
             end
+            local hl = char:FindFirstChild("WindUI_Highlight")
+            hl.FillColor = Config.ESPFillColor
+            hl.OutlineColor = Config.ESPOutlineColor
 
             -- Names
             local head = char:FindFirstChild("Head")
@@ -158,16 +130,13 @@ local function UpdateESP()
                     bb.Size = UDim2.new(0, 200, 0, 50)
                     bb.StudsOffset = Vector3.new(0, 2, 0)
                     bb.AlwaysOnTop = true
-                    
                     local txt = Instance.new("TextLabel", bb)
                     txt.Size = UDim2.new(1,0,1,0)
                     txt.BackgroundTransparency = 1
                     txt.TextColor3 = Color3.white
-                    txt.TextStrokeTransparency = 0
                     txt.Font = Enum.Font.GothamBold
-                    txt.TextSize = 14
+                    txt.TextSize = 12
                     txt.Text = player.DisplayName
-                    
                     ESPContainer[player].Billboard = bb
                 end
             elseif head and head:FindFirstChild("WindUI_NameTag") and not Config.ESPNames then
@@ -177,133 +146,136 @@ local function UpdateESP()
     end
 end
 
--- // ИНТЕРФЕЙС (WINDUI) //
+-- // ИНТЕРФЕЙС //
 
 local Window = WindUI:CreateWindow({
-    Title = "Legit Aim & ESP",
+    Title = "slrNova - Full Script",
     Icon = "solar:shield-check-bold",
     Author = "slrNova",
-    Folder = "WindAimFixed",
-    Size = UDim2.fromOffset(550, 400),
+    Folder = "WindV2_Configs",
+    Size = UDim2.fromOffset(580, 460),
     Transparent = true,
     Theme = "Dark",
     HasOutline = true
 })
 
-local CombatTab = Window:Tab({ Title = "Combat", Icon = "solar:target-bold" })
-local AimSection = CombatTab:Section({ Title = "Aimbot Settings" })
+-- Вкладка Бой
+local CombatTab = Window:Tab({ Title = "Combat", Icon = "solar:bolt-bold" })
+local AimSec = CombatTab:Section({ Title = "Aimbot Settings" })
 
-AimSection:Toggle({
+AimSec:Toggle({
     Title = "Enable Aimbot",
     Default = Config.AimEnabled,
-    Callback = function(Value) Config.AimEnabled = Value end
+    Callback = function(v) Config.AimEnabled = v end
 })
 
-AimSection:Dropdown({
+AimSec:Dropdown({
     Title = "Target Part",
-    Multi = false,
-    Required = true,
     Items = {"Head", "UpperTorso", "HumanoidRootPart"},
     Default = "Head",
-    Callback = function(Value) Config.AimPart = Value end
+    Callback = function(v) Config.AimPart = v end
 })
 
-local AimConfigSection = CombatTab:Section({ Title = "Configuration" })
-
-AimConfigSection:Slider({
-    Title = "FOV Radius",
-    Min = 10, Max = 800, Default = Config.AimRadius, Step = 1,
-    Callback = function(Value)
-        Config.AimRadius = Value
-        if FOVCircle then FOVCircle.Radius = Value end
-    end
-})
-
-AimConfigSection:Slider({
+AimSec:Slider({
     Title = "Smoothness",
-    Min = 0, Max = 1, Default = Config.AimSmoothness, Step = 0.05,
-    Callback = function(Value) Config.AimSmoothness = Value end
+    Min = 0, Max = 0.95, Step = 0.05,
+    Default = Config.AimSmoothness,
+    Callback = function(v) Config.AimSmoothness = v end
 })
 
-AimConfigSection:Toggle({
+local AimMisc = CombatTab:Section({ Title = "Aim Misc" })
+
+AimMisc:Toggle({
     Title = "Wall Check",
     Default = Config.CheckWalls,
-    Callback = function(Value) Config.CheckWalls = Value end
+    Callback = function(v) Config.CheckWalls = v end
 })
 
-local VisualsTab = Window:Tab({ Title = "Visuals", Icon = "solar:eye-bold" })
-local EspSection = VisualsTab:Section({ Title = "ESP Settings" })
+AimMisc:Toggle({
+    Title = "Team Check",
+    Default = Config.CheckTeam,
+    Callback = function(v) Config.CheckTeam = v end
+})
 
-EspSection:Toggle({
+AimMisc:Keybind({
+    Title = "Aim Keybind",
+    Default = Enum.UserInputType.MouseButton2,
+    ChangedCallback = function(v) Config.AimKey = v end
+})
+
+-- Вкладка Визуалы
+local VisualsTab = Window:Tab({ Title = "Visuals", Icon = "solar:eye-bold" })
+local EspSec = VisualsTab:Section({ Title = "Player ESP" })
+
+EspSec:Toggle({
     Title = "Enable ESP",
     Default = Config.ESPEnabled,
-    Callback = function(Value) Config.ESPEnabled = Value end
+    Callback = function(v) Config.ESPEnabled = v end
 })
 
-EspSection:Toggle({
+EspSec:Toggle({
     Title = "Show Names",
     Default = Config.ESPNames,
-    Callback = function(Value) Config.ESPNames = Value end
+    Callback = function(v) Config.ESPNames = v end
 })
 
-EspSection:ColorPicker({
+EspSec:ColorPicker({
     Title = "Fill Color",
     Default = Config.ESPFillColor,
-    Callback = function(Value) Config.ESPFillColor = Value end
+    Callback = function(v) Config.ESPFillColor = v end
 })
 
-local FovSection = VisualsTab:Section({ Title = "FOV Circle" })
+local FovSec = VisualsTab:Section({ Title = "FOV Settings" })
 
-FovSection:Toggle({
-    Title = "Draw FOV",
+FovSec:Toggle({
+    Title = "Show FOV Circle",
     Default = Config.FOVEnabled,
-    Callback = function(Value)
-        Config.FOVEnabled = Value
-        if FOVCircle then FOVCircle.Visible = Value end
+    Callback = function(v) Config.FOVEnabled = v end
+})
+
+FovSec:Slider({
+    Title = "FOV Radius",
+    Min = 30, Max = 600, Default = Config.AimRadius,
+    Callback = function(v) 
+        Config.AimRadius = v 
+        if FOVCircle then FOVCircle.Radius = v end
     end
 })
 
+-- Вкладка Настройки
 local SettingsTab = Window:Tab({ Title = "Settings", Icon = "solar:settings-bold" })
-SettingsTab:Section({ Title = "Script" }):Button({
-    Title = "Unload Script",
+SettingsTab:Section({ Title = "Unload" }):Button({
+    Title = "Destroy UI & Stop",
     Callback = function()
         if FOVCircle then FOVCircle:Remove() end
         Window:Destroy()
         Config.ESPEnabled = false
         UpdateESP()
-        script.Disabled = true 
     end
 })
 
--- // ОБРАБОТЧИКИ (MAIN LOOPS) //
+-- // ЦИКЛЫ //
 
-local isAiming = false
-
-UserInputService.InputBegan:Connect(function(input, gpe)
-    if gpe then return end
-    if input.UserInputType == Config.AimKey then isAiming = true end
+UserInputService.InputBegan:Connect(function(i, g)
+    if not g and (i.UserInputType == Config.AimKey or i.KeyCode == Config.AimKey) then isAiming = true end
 end)
 
-UserInputService.InputEnded:Connect(function(input, gpe)
-    if input.UserInputType == Config.AimKey then isAiming = false; AimTarget = nil end
+UserInputService.InputEnded:Connect(function(i)
+    if i.UserInputType == Config.AimKey or i.KeyCode == Config.AimKey then isAiming = false end
 end)
 
 RunService.RenderStepped:Connect(function()
-    -- Обновляем круг
     if FOVCircle then
-        FOVCircle.Position = Vector2.new(Mouse.X, Mouse.Y + 36)
         FOVCircle.Visible = Config.FOVEnabled
+        FOVCircle.Position = Vector2.new(Mouse.X, Mouse.Y + 36)
+        FOVCircle.Color = Config.FOVColor
     end
-    
-    -- Aimbot
+
     if Config.AimEnabled and isAiming then
-        AimTarget = GetClosestPlayer()
-        if AimTarget then
-            local currentCFrame = Camera.CFrame
-            local targetCFrame = CFrame.new(currentCFrame.Position, AimTarget.Position)
-            local lerpFactor = 1 - Config.AimSmoothness
-            if lerpFactor < 0.01 then lerpFactor = 0.01 end
-            Camera.CFrame = currentCFrame:Lerp(targetCFrame, lerpFactor)
+        local target = GetClosestTarget()
+        if target then
+            local goal = CFrame.new(Camera.CFrame.Position, target.Position)
+            Camera.CFrame = Camera.CFrame:Lerp(goal, 1 - Config.AimSmoothness)
         end
     end
 end)
@@ -313,8 +285,8 @@ task.spawn(function()
 end)
 
 WindUI:Notify({
-    Title = "Success",
-    Content = "Script Fixed & Loaded!",
+    Title = "System Ready",
+    Content = "All modules loaded successfully.",
     Icon = "solar:check-circle-bold",
     Duration = 3
 })
