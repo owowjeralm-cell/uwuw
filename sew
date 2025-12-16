@@ -1,292 +1,131 @@
--- // СЕРВИСЫ //
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
-local Workspace = game:GetService("Workspace")
-local Camera = Workspace.CurrentCamera
-local LocalPlayer = Players.LocalPlayer
-local Mouse = LocalPlayer:GetMouse()
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+local Players, RunService, UIS, WS = game:GetService("Players"), game:GetService("RunService"), game:GetService("UserInputService"), game:GetService("Workspace")
+local LP, Camera, Mouse = Players.LocalPlayer, WS.CurrentCamera, Players.LocalPlayer:GetMouse()
 
--- // ЗАГРУЗКА БИБЛИОТЕКИ (БЕЗОПАСНАЯ) //
-local success, WindUI = pcall(function()
-    return loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/source.lua"))()
-end)
-
-if not success or not WindUI then
-    warn("FATAL: Could not load WindUI. Check your executor or connection.")
-    return
-end
-
--- // КОНФИГУРАЦИЯ //
-local Config = {
-    -- Aim
-    AimEnabled = false,
-    AimKey = Enum.UserInputType.MouseButton2,
-    AimPart = "Head",
-    AimRadius = 150,
-    AimSmoothness = 0.5,
-    CheckWalls = true,
-    CheckTeam = true,
-    -- Visuals
-    FOVEnabled = true,
-    FOVColor = Color3.fromRGB(255, 255, 255),
-    ESPEnabled = false,
-    ESPNames = false,
-    ESPFillColor = Color3.fromRGB(255, 105, 180),
-    ESPOutlineColor = Color3.fromRGB(255, 255, 255)
+-- // SETTINGS //
+local CFG = {
+    AimEnabled = true, SilentAim = false, MaxDist = 65, MaxRadius = 200, FovAngle = 70,
+    AimPart = "HumanoidRootPart", ObstacleCheck = true, ShowRadius = true,
+    Crosshair = true, ShowPing = true, ShowFPS = true,
+    ESP = false, Names = false, ThroughWalls = true, MaxEspDist = 1000,
+    Colors = {Main = Color3.fromRGB(255, 105, 180), Text = Color3.white}
 }
 
--- // ПЕРЕМЕННЫЕ ЛОГИКИ //
-local FOVCircle = nil
-pcall(function()
-    FOVCircle = Drawing.new("Circle")
-    FOVCircle.Thickness = 1
-    FOVCircle.NumSides = 60
-    FOVCircle.Filled = false
-    FOVCircle.Transparency = 1
-    FOVCircle.Visible = false
-end)
+local isAiming, fps, connections, espObjs = false, 0, {}, {}
 
-local ESPContainer = {}
-local isAiming = false
-
--- // ФУНКЦИИ ЛОГИКИ //
-
-local function IsVisible(targetPart)
-    if not Config.CheckWalls then return true end
-    local rayParams = RaycastParams.new()
-    rayParams.FilterDescendantsInstances = {LocalPlayer.Character, targetPart.Parent}
-    rayParams.FilterType = Enum.RaycastFilterType.Exclude
-    local result = Workspace:Raycast(Camera.CFrame.Position, (targetPart.Position - Camera.CFrame.Position), rayParams)
-    return result == nil
-end
-
-local function GetClosestTarget()
-    local closest = nil
-    local shortestDist = Config.AimRadius
-
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player == LocalPlayer or (Config.CheckTeam and player.Team == LocalPlayer.Team) then continue end
-        
-        local char = player.Character
-        local part = char and char:FindFirstChild(Config.AimPart)
-        local hum = char and char:FindFirstChild("Humanoid")
-
+-- // UTILS //
+local function getTarget()
+    local best, dist = nil, CFG.MaxRadius
+    for _, p in pairs(Players:GetPlayers()) do
+        if p == LP or not p.Character then continue end
+        local part = p.Character:FindFirstChild(CFG.AimPart)
+        local hum = p.Character:FindFirstChildOfClass("Humanoid")
         if part and hum and hum.Health > 0 then
-            local pos, onScreen = Camera:WorldToScreenPoint(part.Position)
+            local screenPos, onScreen = Camera:WorldToScreenPoint(part.Position)
             if onScreen then
-                local mouseDist = (Vector2.new(pos.X, pos.Y) - Vector2.new(Mouse.X, Mouse.Y)).Magnitude
-                if mouseDist < shortestDist and IsVisible(part) then
-                    shortestDist = mouseDist
-                    closest = part
+                local mDist = (Vector2.new(screenPos.X, screenPos.Y) - Vector2.new(Mouse.X, Mouse.Y)).Magnitude
+                local pDist = (LP.Character.Head.Position - part.Position).Magnitude
+                if mDist < dist and pDist < CFG.MaxDist then
+                    if CFG.ObstacleCheck then
+                        local cast = WS:Raycast(Camera.CFrame.Position, part.Position - Camera.CFrame.Position, RaycastParams.new())
+                        if cast and not cast.Instance:IsDescendantOf(p.Character) then continue end
+                    end
+                    dist, best = mDist, part
                 end
             end
         end
     end
-    return closest
+    return best
 end
 
-local function UpdateESP()
-    if not Config.ESPEnabled then
-        for _, obj in pairs(ESPContainer) do
-            if obj.Highlight then obj.Highlight:Destroy() end
-            if obj.Billboard then obj.Billboard:Destroy() end
-        end
-        ESPContainer = {}
-        return
-    end
-
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character then
-            if Config.CheckTeam and player.Team == LocalPlayer.Team then 
-                if ESPContainer[player] then
-                    if ESPContainer[player].Highlight then ESPContainer[player].Highlight:Destroy() end
-                    if ESPContainer[player].Billboard then ESPContainer[player].Billboard:Destroy() end
-                    ESPContainer[player] = nil
-                end
-                continue 
-            end
-
-            local char = player.Character
-            if not ESPContainer[player] then ESPContainer[player] = {} end
-
-            -- Highlight
-            if not char:FindFirstChild("WindUI_Highlight") then
-                local hl = Instance.new("Highlight", char)
-                hl.Name = "WindUI_Highlight"
-                hl.FillTransparency = 0.5
-                ESPContainer[player].Highlight = hl
-            end
-            local hl = char:FindFirstChild("WindUI_Highlight")
-            hl.FillColor = Config.ESPFillColor
-            hl.OutlineColor = Config.ESPOutlineColor
-
-            -- Names
-            local head = char:FindFirstChild("Head")
-            if head and Config.ESPNames then
-                if not head:FindFirstChild("WindUI_NameTag") then
-                    local bb = Instance.new("BillboardGui", head)
-                    bb.Name = "WindUI_NameTag"
-                    bb.Size = UDim2.new(0, 200, 0, 50)
-                    bb.StudsOffset = Vector3.new(0, 2, 0)
-                    bb.AlwaysOnTop = true
-                    local txt = Instance.new("TextLabel", bb)
-                    txt.Size = UDim2.new(1,0,1,0)
-                    txt.BackgroundTransparency = 1
-                    txt.TextColor3 = Color3.white
-                    txt.Font = Enum.Font.GothamBold
-                    txt.TextSize = 12
-                    txt.Text = player.DisplayName
-                    ESPContainer[player].Billboard = bb
-                end
-            elseif head and head:FindFirstChild("WindUI_NameTag") and not Config.ESPNames then
-                head.WindUI_NameTag:Destroy()
-            end
-        end
-    end
-end
-
--- // ИНТЕРФЕЙС //
-
-local Window = WindUI:CreateWindow({
-    Title = "slrNova - Full Script",
-    Icon = "solar:shield-check-bold",
-    Author = "slrNova",
-    Folder = "WindV2_Configs",
-    Size = UDim2.fromOffset(580, 460),
-    Transparent = true,
-    Theme = "Dark",
-    HasOutline = true
-})
-
--- Вкладка Бой
-local CombatTab = Window:Tab({ Title = "Combat", Icon = "solar:bolt-bold" })
-local AimSec = CombatTab:Section({ Title = "Aimbot Settings" })
-
-AimSec:Toggle({
-    Title = "Enable Aimbot",
-    Default = Config.AimEnabled,
-    Callback = function(v) Config.AimEnabled = v end
-})
-
-AimSec:Dropdown({
-    Title = "Target Part",
-    Items = {"Head", "UpperTorso", "HumanoidRootPart"},
-    Default = "Head",
-    Callback = function(v) Config.AimPart = v end
-})
-
-AimSec:Slider({
-    Title = "Smoothness",
-    Min = 0, Max = 0.95, Step = 0.05,
-    Default = Config.AimSmoothness,
-    Callback = function(v) Config.AimSmoothness = v end
-})
-
-local AimMisc = CombatTab:Section({ Title = "Aim Misc" })
-
-AimMisc:Toggle({
-    Title = "Wall Check",
-    Default = Config.CheckWalls,
-    Callback = function(v) Config.CheckWalls = v end
-})
-
-AimMisc:Toggle({
-    Title = "Team Check",
-    Default = Config.CheckTeam,
-    Callback = function(v) Config.CheckTeam = v end
-})
-
-AimMisc:Keybind({
-    Title = "Aim Keybind",
-    Default = Enum.UserInputType.MouseButton2,
-    ChangedCallback = function(v) Config.AimKey = v end
-})
-
--- Вкладка Визуалы
-local VisualsTab = Window:Tab({ Title = "Visuals", Icon = "solar:eye-bold" })
-local EspSec = VisualsTab:Section({ Title = "Player ESP" })
-
-EspSec:Toggle({
-    Title = "Enable ESP",
-    Default = Config.ESPEnabled,
-    Callback = function(v) Config.ESPEnabled = v end
-})
-
-EspSec:Toggle({
-    Title = "Show Names",
-    Default = Config.ESPNames,
-    Callback = function(v) Config.ESPNames = v end
-})
-
-EspSec:ColorPicker({
-    Title = "Fill Color",
-    Default = Config.ESPFillColor,
-    Callback = function(v) Config.ESPFillColor = v end
-})
-
-local FovSec = VisualsTab:Section({ Title = "FOV Settings" })
-
-FovSec:Toggle({
-    Title = "Show FOV Circle",
-    Default = Config.FOVEnabled,
-    Callback = function(v) Config.FOVEnabled = v end
-})
-
-FovSec:Slider({
-    Title = "FOV Radius",
-    Min = 30, Max = 600, Default = Config.AimRadius,
-    Callback = function(v) 
-        Config.AimRadius = v 
-        if FOVCircle then FOVCircle.Radius = v end
-    end
-})
-
--- Вкладка Настройки
-local SettingsTab = Window:Tab({ Title = "Settings", Icon = "solar:settings-bold" })
-SettingsTab:Section({ Title = "Unload" }):Button({
-    Title = "Destroy UI & Stop",
-    Callback = function()
-        if FOVCircle then FOVCircle:Remove() end
-        Window:Destroy()
-        Config.ESPEnabled = false
-        UpdateESP()
-    end
-})
-
--- // ЦИКЛЫ //
-
-UserInputService.InputBegan:Connect(function(i, g)
-    if not g and (i.UserInputType == Config.AimKey or i.KeyCode == Config.AimKey) then isAiming = true end
-end)
-
-UserInputService.InputEnded:Connect(function(i)
-    if i.UserInputType == Config.AimKey or i.KeyCode == Config.AimKey then isAiming = false end
-end)
-
-RunService.RenderStepped:Connect(function()
-    if FOVCircle then
-        FOVCircle.Visible = Config.FOVEnabled
-        FOVCircle.Position = Vector2.new(Mouse.X, Mouse.Y + 36)
-        FOVCircle.Color = Config.FOVColor
-    end
-
-    if Config.AimEnabled and isAiming then
-        local target = GetClosestTarget()
+-- // SILENT AIM LOGIC //
+local oldNamecall
+oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+    local args = {...}
+    local method = getnamecallmethod()
+    if CFG.SilentAim and method == "Raycast" then
+        local target = getTarget()
         if target then
-            local goal = CFrame.new(Camera.CFrame.Position, target.Position)
-            Camera.CFrame = Camera.CFrame:Lerp(goal, 1 - Config.AimSmoothness)
+            args[2] = target.Position - args[1]
+            return oldNamecall(self, unpack(args))
         end
     end
+    return oldNamecall(self, ...)
 end)
+
+-- // UI SETUP //
+local Window = Rayfield:CreateWindow({Name = "slrNova | Silent Edition", LoadingTitle = "Loading..."})
+local Main = Window:CreateTab("Main")
+
+Main:CreateSection("Aimbot & Silent")
+
+Main:CreateToggle({
+    Name = "Enable Aimlock (Cam)",
+    CurrentValue = CFG.AimEnabled,
+    Callback = function(v) CFG.AimEnabled = v end
+})
+
+Main:CreateToggle({
+    Name = "Enable Silent Aim",
+    CurrentValue = CFG.SilentAim,
+    Callback = function(v) 
+        CFG.SilentAim = v 
+        Rayfield:Notify({Title = "Silent Aim", Content = v and "ON" or "OFF", Duration = 2})
+    end
+})
+
+Main:CreateSlider({
+    Name = "FOV Radius", Range = {50, 500}, Increment = 10, CurrentValue = 200,
+    Callback = function(v) CFG.MaxRadius = v end
+})
+
+-- // VISUALS //
+local function createDrawing(obj, props)
+    local d = Drawing.new(obj)
+    for k, v in pairs(props) do d[k] = v end
+    return d
+end
+
+local circle = createDrawing("Circle", {Thickness = 1, NumSides = 60, Color = CFG.Colors.Main, Filled = false})
+
+-- // MAIN LOOP //
+table.insert(connections, RunService.RenderStepped:Connect(function()
+    circle.Visible = CFG.ShowRadius
+    circle.Radius = CFG.MaxRadius
+    circle.Position = Vector2.new(Mouse.X, Mouse.Y + 36)
+    
+    if CFG.AimEnabled and isAiming then
+        local t = getTarget()
+        if t then Camera.CFrame = CFrame.new(Camera.CFrame.Position, t.Position) end
+    end
+end))
+
+-- // INPUT //
+UIS.InputBegan:Connect(function(i, g)
+    if not g and i.UserInputType == Enum.UserInputType.MouseButton2 then isAiming = true end
+end)
+UIS.InputEnded:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.MouseButton2 then isAiming = false end
+end)
+
+-- // ESP (Simplified) //
+local function doESP()
+    for _, p in pairs(Players:GetPlayers()) do
+        if p == LP then continue end
+        if CFG.ESP and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+            if not p.Character:FindFirstChild("Highlight") then
+                local h = Instance.new("Highlight", p.Character)
+                h.FillTransparency = 0.5
+                h.OutlineColor = CFG.Colors.Main
+            end
+        elseif p.Character and p.Character:FindFirstChild("Highlight") then
+            p.Character.Highlight:Destroy()
+        end
+    end
+end
 
 task.spawn(function()
-    while task.wait(0.5) do UpdateESP() end
+    while task.wait(1) do doESP() end
 end)
 
-WindUI:Notify({
-    Title = "System Ready",
-    Content = "All modules loaded successfully.",
-    Icon = "solar:check-circle-bold",
-    Duration = 3
-})
+Rayfield:Notify({Title = "Loaded", Content = "slrNova Silent Aim Ready", Duration = 3})
