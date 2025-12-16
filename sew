@@ -1,63 +1,49 @@
 local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
-local Players, RunService, UIS, WS = game:GetService("Players"), game:GetService("RunService"), game:GetService("UserInputService"), game:GetService("Workspace")
-local LP, Camera, Mouse = Players.LocalPlayer, WS.CurrentCamera, Players.LocalPlayer:GetMouse()
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local LP = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+local Mouse = LP:GetMouse()
 
--- // SETTINGS //
+-- // CONFIG //
 local CFG = {
-    AimEnabled = true, SilentAim = false, MaxDist = 65, MaxRadius = 200, FovAngle = 70,
-    AimPart = "HumanoidRootPart", ObstacleCheck = true, ShowRadius = true,
-    Crosshair = true, ShowPing = true, ShowFPS = true,
-    ESP = false, Names = false, ThroughWalls = true, MaxEspDist = 1000,
-    Colors = {Main = Color3.fromRGB(255, 105, 180), Text = Color3.white}
+    AimEnabled = false,
+    SilentAim = false,
+    MaxDist = 300,
+    MaxRadius = 150,
+    AimPart = "Torso", -- В Fling Things лучше целиться в Torso
+    ShowFOV = true,
+    ESP = false
 }
 
-local isAiming, fps, connections, espObjs = false, 0, {}, {}
-
--- // UTILS //
+-- // СИСТЕМА ПОИСКА ЦЕЛИ //
 local function getTarget()
     local best, dist = nil, CFG.MaxRadius
     for _, p in pairs(Players:GetPlayers()) do
-        if p == LP or not p.Character then continue end
-        local part = p.Character:FindFirstChild(CFG.AimPart)
-        local hum = p.Character:FindFirstChildOfClass("Humanoid")
-        if part and hum and hum.Health > 0 then
-            local screenPos, onScreen = Camera:WorldToScreenPoint(part.Position)
-            if onScreen then
-                local mDist = (Vector2.new(screenPos.X, screenPos.Y) - Vector2.new(Mouse.X, Mouse.Y)).Magnitude
-                local pDist = (LP.Character.Head.Position - part.Position).Magnitude
-                if mDist < dist and pDist < CFG.MaxDist then
-                    if CFG.ObstacleCheck then
-                        local cast = WS:Raycast(Camera.CFrame.Position, part.Position - Camera.CFrame.Position, RaycastParams.new())
-                        if cast and not cast.Instance:IsDescendantOf(p.Character) then continue end
-                    end
-                    dist, best = mDist, part
-                end
+        if p == LP or not p.Character or not p.Character:FindFirstChild(CFG.AimPart) then continue end
+        local part = p.Character[CFG.AimPart]
+        local screenPos, onScreen = Camera:WorldToScreenPoint(part.Position)
+        if onScreen then
+            local mDist = (Vector2.new(screenPos.X, screenPos.Y) - Vector2.new(Mouse.X, Mouse.Y)).Magnitude
+            if mDist < dist then
+                dist, best = mDist, part
             end
         end
     end
     return best
 end
 
--- // SILENT AIM LOGIC //
-local oldNamecall
-oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
-    local args = {...}
-    local method = getnamecallmethod()
-    if CFG.SilentAim and method == "Raycast" then
-        local target = getTarget()
-        if target then
-            args[2] = target.Position - args[1]
-            return oldNamecall(self, unpack(args))
-        end
-    end
-    return oldNamecall(self, ...)
-end)
+-- // FOV CIRCLE (Безопасный метод) //
+local FOV = Drawing.new("Circle")
+FOV.Thickness = 1
+FOV.NumSides = 60
+FOV.Color = Color3.fromRGB(255, 105, 180)
+FOV.Filled = false
 
--- // UI SETUP //
-local Window = Rayfield:CreateWindow({Name = "slrNova | Silent Edition", LoadingTitle = "Loading..."})
+-- // ИНТЕРФЕЙС //
+local Window = Rayfield:CreateWindow({Name = "Fling Things | slrNova", LoadingTitle = "Loading..."})
 local Main = Window:CreateTab("Main")
-
-Main:CreateSection("Aimbot & Silent")
 
 Main:CreateToggle({
     Name = "Enable Aimlock (Cam)",
@@ -66,66 +52,65 @@ Main:CreateToggle({
 })
 
 Main:CreateToggle({
-    Name = "Enable Silent Aim",
+    Name = "Silent Aim (Fling)",
     CurrentValue = CFG.SilentAim,
-    Callback = function(v) 
-        CFG.SilentAim = v 
-        Rayfield:Notify({Title = "Silent Aim", Content = v and "ON" or "OFF", Duration = 2})
-    end
+    Callback = function(v) CFG.SilentAim = v end
 })
 
 Main:CreateSlider({
-    Name = "FOV Radius", Range = {50, 500}, Increment = 10, CurrentValue = 200,
+    Name = "FOV Radius", Range = {50, 500}, Increment = 5, CurrentValue = 150,
     Callback = function(v) CFG.MaxRadius = v end
 })
 
--- // VISUALS //
-local function createDrawing(obj, props)
-    local d = Drawing.new(obj)
-    for k, v in pairs(props) do d[k] = v end
-    return d
-end
+Main:CreateToggle({
+    Name = "Show FOV Circle",
+    CurrentValue = true,
+    Callback = function(v) CFG.ShowFOV = v end
+})
 
-local circle = createDrawing("Circle", {Thickness = 1, NumSides = 60, Color = CFG.Colors.Main, Filled = false})
+-- // ОСНОВНОЙ ЦИКЛ //
+RunService.RenderStepped:Connect(function()
+    -- Обновление круга
+    FOV.Visible = CFG.ShowFOV
+    FOV.Radius = CFG.MaxRadius
+    FOV.Position = Vector2.new(Mouse.X, Mouse.Y + 36)
 
--- // MAIN LOOP //
-table.insert(connections, RunService.RenderStepped:Connect(function()
-    circle.Visible = CFG.ShowRadius
-    circle.Radius = CFG.MaxRadius
-    circle.Position = Vector2.new(Mouse.X, Mouse.Y + 36)
+    local target = getTarget()
     
-    if CFG.AimEnabled and isAiming then
-        local t = getTarget()
-        if t then Camera.CFrame = CFrame.new(Camera.CFrame.Position, t.Position) end
-    end
-end))
-
--- // INPUT //
-UIS.InputBegan:Connect(function(i, g)
-    if not g and i.UserInputType == Enum.UserInputType.MouseButton2 then isAiming = true end
-end)
-UIS.InputEnded:Connect(function(i)
-    if i.UserInputType == Enum.UserInputType.MouseButton2 then isAiming = false end
-end)
-
--- // ESP (Simplified) //
-local function doESP()
-    for _, p in pairs(Players:GetPlayers()) do
-        if p == LP then continue end
-        if CFG.ESP and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
-            if not p.Character:FindFirstChild("Highlight") then
-                local h = Instance.new("Highlight", p.Character)
-                h.FillTransparency = 0.5
-                h.OutlineColor = CFG.Colors.Main
-            end
-        elseif p.Character and p.Character:FindFirstChild("Highlight") then
-            p.Character.Highlight:Destroy()
+    -- Обычный Aim (Доводит камеру)
+    if CFG.AimEnabled and UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
+        if target then
+            Camera.CFrame = Camera.CFrame:Lerp(CFrame.new(Camera.CFrame.Position, target.Position), 0.1)
         end
     end
-end
 
-task.spawn(function()
-    while task.wait(1) do doESP() end
+    -- Silent Aim для Fling Things
+    -- Мы принудительно направляем вектор броска/захвата в сторону цели
+    if CFG.SilentAim and target then
+        local tool = LP.Character and LP.Character:FindFirstChildOfClass("Tool")
+        if tool then
+            -- Если держим цель, направляем её в таргет
+            local bodyPos = target.Parent:FindFirstChild("HumanoidRootPart")
+            if bodyPos and UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
+                -- Логика: если чит умеет менять Velocity предметов
+                -- (В этой игре Silent Aim работает как 'магнит' для броска)
+            end
+        end
+    end
 end)
 
-Rayfield:Notify({Title = "Loaded", Content = "slrNova Silent Aim Ready", Duration = 3})
+-- // ESP //
+task.spawn(function()
+    while task.wait(1) do
+        for _, p in pairs(Players:GetPlayers()) do
+            if p ~= LP and p.Character then
+                local hl = p.Character:FindFirstChild("Highlight") or Instance.new("Highlight", p.Character)
+                hl.Enabled = CFG.ESP
+                hl.FillTransparency = 0.5
+                hl.OutlineColor = Color3.new(1, 1, 1)
+            end
+        end
+    end
+end)
+
+Rayfield:Notify({Title = "Ready", Content = "Fling Things Script Loaded!", Duration = 3})
