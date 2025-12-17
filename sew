@@ -1,149 +1,198 @@
 local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 
--- Основное окно с автосохранением в файл perdoleAIM
 local Window = Rayfield:CreateWindow({
-   Name = "Perdole Suite v2",
-   LoadingTitle = "Загрузка систем...",
+   Name = "Perdole Suite V4",
+   LoadingTitle = "Загрузка Combat-модулей...",
    LoadingSubtitle = "by Gemini",
    ConfigurationSaving = {
       Enabled = true,
-      FolderName = "PerdoleScripts", 
-      FileName = "perdoleAIM" -- Тот самый файл
+      FolderName = "PerdoleScripts",
+      FileName = "perdoleAIM"
    }
 })
 
 -- Настройки
 local Settings = {
-    AimbotEnabled = false,
-    SilentAim = true,
-    TeamCheck = true,
-    WallCheck = true,
+    Aimbot = false,
+    ESP = false,
+    AntiAim = false,
+    AA_Type = "Spin", -- Spin или Pitch (Вниз)
+    ThirdPerson = false,
+    TPDist = 15,
     FOV = 150,
-    VisualRay = true,
-    AntiAimEnabled = false,
-    TriggerBot = false,
+    TeamCheck = true
 }
 
 local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
-local RunService = game:GetService("RunService")
-local Stats = game:GetService("Stats")
 
---- СОЗДАНИЕ ПЛАВАЮЩЕГО HUD (FPS/ПИНГ/СТАТУС) ---
-local HudGui = Instance.new("ScreenGui", LocalPlayer:WaitForChild("PlayerGui"))
-HudGui.Name = "PerdoleHUD"
+--- ВИЗУАЛИЗАЦИЯ (ЛИНИЯ НАВОДКИ) ---
+local AimLine = Drawing.new("Line")
+AimLine.Visible = false
+AimLine.Color = Color3.fromRGB(0, 255, 255) -- Бирюзовая линия
+AimLine.Thickness = 1.5
 
-local MainFrame = Instance.new("Frame", HudGui)
-MainFrame.Size = UDim2.new(0, 150, 0, 80)
-MainFrame.Position = UDim2.new(0, 50, 0.8, 0) -- Слева снизу
-MainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-MainFrame.BorderSizePixel = 0
-MainFrame.Active = true
-MainFrame.Draggable = true -- Делаем его передвигаемым
-
-local Corner = Instance.new("UICorner", MainFrame)
-local TextLabel = Instance.new("TextLabel", MainFrame)
-TextLabel.Size = UDim2.new(1, -10, 1, -10)
-TextLabel.Position = UDim2.new(0, 5, 0, 5)
-TextLabel.BackgroundTransparency = 1
-TextLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-TextLabel.TextSize = 14
-TextLabel.Font = Enum.Font.Code
-TextLabel.TextXAlignment = Enum.TextXAlignment.Left
-TextLabel.RichText = true
-
---- ВИЗУАЛИЗАЦИЯ ЛИНИИ АИМБОТА ---
-local AimBeam = Instance.new("Part", workspace)
-AimBeam.Anchored = true
-AimBeam.CanCollide = false
-AimBeam.Transparency = 1
-local SelectionPart = Instance.new("BoxHandleAdornment", AimBeam)
-SelectionPart.Adornee = nil
-SelectionPart.AlwaysOnTop = true
-SelectionPart.ZIndex = 10
-SelectionPart.Size = Vector3.new(0.2, 0.2, 1)
-SelectionPart.Color3 = Color3.fromRGB(255, 0, 0)
-
---- ЛОГИКА ОБНОВЛЕНИЯ ДАННЫХ ---
-local function GetClosestPlayer()
-    local closest = nil
-    local shortestDistance = math.huge
-    for _, player in pairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
-            if Settings.TeamCheck and player.Team == LocalPlayer.Team then continue end
+--- ESP СИСТЕМА ---
+local function CreateESP(player)
+    local box = Drawing.new("Square")
+    box.Visible = false
+    box.Color = Color3.fromRGB(255, 0, 0)
+    box.Thickness = 1
+    
+    RunService.RenderStepped:Connect(function()
+        if player.Character and player.Character:FindFirstChild("HumanoidRootPart") and Settings.ESP and player ~= LocalPlayer then
+            if Settings.TeamCheck and player.Team == LocalPlayer.Team then box.Visible = false return end
             
             local pos, onScreen = Camera:WorldToViewportPoint(player.Character.HumanoidRootPart.Position)
             if onScreen then
-                local distance = (Vector2.new(pos.X, pos.Y) - Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)).Magnitude
-                if distance < Settings.FOV and distance < shortestDistance then
-                    closest = player
-                    shortestDistance = distance
+                local size = 2000 / pos.Z
+                box.Size = Vector2.new(size, size * 1.5)
+                box.Position = Vector2.new(pos.X - box.Size.X / 2, pos.Y - box.Size.Y / 2)
+                box.Visible = true
+            else
+                box.Visible = false
+            end
+        else
+            box.Visible = false
+        end
+    end)
+end
+
+for _, p in pairs(Players:GetPlayers()) do CreateESP(p) end
+Players.PlayerAdded:Connect(CreateESP)
+
+--- ФУНКЦИЯ ПОИСКА БЛИЖАЙШЕГО ---
+local function GetClosest()
+    local target = nil
+    local dist = Settings.FOV
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+            if Settings.TeamCheck and p.Team == LocalPlayer.Team then continue end
+            
+            local pos, onScreen = Camera:WorldToViewportPoint(p.Character.HumanoidRootPart.Position)
+            if onScreen then
+                local mag = (Vector2.new(pos.X, pos.Y) - Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)).Magnitude
+                if mag < dist then
+                    -- Проверка стен
+                    local ray = Ray.new(Camera.CFrame.Position, (p.Character.HumanoidRootPart.Position - Camera.CFrame.Position).Unit * 500)
+                    local hit = workspace:FindPartOnRayWithIgnoreList(ray, {LocalPlayer.Character, p.Character})
+                    if not hit then
+                        target = p
+                        dist = mag
+                    end
                 end
             end
         end
     end
-    return closest
+    return target
 end
 
--- Основной цикл
+--- ЦИКЛ ОБРАБОТКИ ---
 RunService.RenderStepped:Connect(function()
-    -- Обновление текста HUD
-    local fps = math.floor(1 / RunService.RenderStepped:Wait())
-    local ping = math.floor(Stats.Network.ServerStatsItem["Data Ping"]:GetValue())
-    local aimStatus = Settings.AimbotEnabled and "<font color='#00FF00'>ON</font>" or "<font color='#FF0000'>OFF</font>"
-    
-    TextLabel.Text = string.format(
-        "FPS: %d\nPING: %d ms\nAIMBOT: %s",
-        fps, ping, aimStatus
-    )
+    -- 1. Третье лицо
+    if Settings.ThirdPerson then
+        LocalPlayer.CameraMaxZoomDistance = Settings.TPDist
+        LocalPlayer.CameraMinZoomDistance = Settings.TPDist
+    else
+        LocalPlayer.CameraMaxZoomDistance = 128
+        LocalPlayer.CameraMinZoomDistance = 0.5
+    end
 
-    -- Визуализация наводки
-    local target = GetClosestPlayer()
-    if Settings.AimbotEnabled and target and Settings.VisualRay then
-        local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-        if hrp then
-            SelectionPart.Adornee = target.Character.HumanoidRootPart
-            SelectionPart.Visible = true
+    -- 2. Anti-Aim
+    if Settings.AntiAim and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+        local hrp = LocalPlayer.Character.HumanoidRootPart
+        if Settings.AA_Type == "Spin" then
+            hrp.CFrame = hrp.CFrame * CFrame.Angles(0, math.rad(45), 0)
+        elseif Settings.AA_Type == "Down" then
+            hrp.CFrame = hrp.CFrame * CFrame.Angles(math.rad(-80), 0, 0)
+        end
+    end
+
+    -- 3. Визуализация Silent Aim (Линия к цели)
+    local target = GetClosest()
+    if Settings.Aimbot and target then
+        local tPos, onScreen = Camera:WorldToViewportPoint(target.Character.HumanoidRootPart.Position)
+        if onScreen then
+            AimLine.From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+            AimLine.To = Vector2.new(tPos.X, tPos.Y)
+            AimLine.Visible = true
+        else
+            AimLine.Visible = false
         end
     else
-        SelectionPart.Visible = false
+        AimLine.Visible = false
     end
 end)
 
---- ТАБЫ И КНОПКИ ---
-local MainTab = Window:CreateTab("Combat", 4483362458)
+--- МЕНЮ ---
+local CombatTab = Window:CreateTab("Combat", 4483362458)
+local VisualsTab = Window:CreateTab("Visuals", 4483345998)
 
-MainTab:CreateToggle({
-   Name = "Включить Aimbot",
+-- Вкладка Боя
+CombatTab:CreateSection("Aimbot")
+CombatTab:CreateToggle({
+   Name = "Silent Aimbot",
    CurrentValue = false,
-   Flag = "AimToggle", -- Флаг для сохранения
-   Callback = function(Value)
-      Settings.AimbotEnabled = Value
-   end,
+   Flag = "aim_en",
+   Callback = function(v) Settings.Aimbot = v end,
 })
 
-MainTab:CreateToggle({
-   Name = "Показывать луч аимбота",
-   CurrentValue = true,
-   Flag = "VisualRay",
-   Callback = function(Value)
-      Settings.VisualRay = Value
-   end,
+CombatTab:CreateKeybind({
+   Name = "Бинд на Аимбот",
+   CurrentKeybind = "F",
+   Flag = "aim_kb",
+   Callback = function() Settings.Aimbot = not Settings.Aimbot end,
 })
 
-MainTab:CreateSlider({
-   Name = "FOV (Радиус наводки)",
-   Range = {0, 800},
+CombatTab:CreateSlider({
+   Name = "FOV (Радиус)",
+   Range = {50, 800},
    Increment = 10,
-   Suffix = "px",
    CurrentValue = 150,
-   Flag = "AimFOV",
-   Callback = function(Value)
-      Settings.FOV = Value
-   end,
+   Flag = "aim_fov",
+   Callback = function(v) Settings.FOV = v end,
 })
 
--- Автозагрузка конфига
-Rayfield:LoadConfiguration()
+CombatTab:CreateSection("Anti-Aim")
+CombatTab:CreateToggle({
+   Name = "Включить Anti-Aim",
+   CurrentValue = false,
+   Flag = "aa_en",
+   Callback = function(v) Settings.AntiAim = v end,
+})
 
+CombatTab:CreateDropdown({
+   Name = "Тип Anti-Aim",
+   Options = {"Spin", "Down"},
+   CurrentOption = "Spin",
+   Flag = "aa_type",
+   Callback = function(v) Settings.AA_Type = v[1] end,
+})
+
+-- Вкладка Визуалов
+VisualsTab:CreateToggle({
+   Name = "ESP (Квадраты)",
+   CurrentValue = false,
+   Flag = "esp_en",
+   Callback = function(v) Settings.ESP = v end,
+})
+
+VisualsTab:CreateToggle({
+   Name = "Третье лицо",
+   CurrentValue = false,
+   Flag = "tp_en",
+   Callback = function(v) Settings.ThirdPerson = v end,
+})
+
+VisualsTab:CreateSlider({
+   Name = "Дистанция камеры",
+   Range = {5, 50},
+   Increment = 1,
+   CurrentValue = 15,
+   Flag = "tp_dist",
+   Callback = function(v) Settings.TPDist = v end,
+})
+
+Rayfield:LoadConfiguration()
