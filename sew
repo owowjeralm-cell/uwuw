@@ -1,116 +1,149 @@
 local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local UIS = game:GetService("UserInputService")
-local LP = Players.LocalPlayer
-local Camera = workspace.CurrentCamera
-local Mouse = LP:GetMouse()
 
--- // CONFIG //
-local CFG = {
-    AimEnabled = false,
-    SilentAim = false,
-    MaxDist = 300,
-    MaxRadius = 150,
-    AimPart = "Torso", -- В Fling Things лучше целиться в Torso
-    ShowFOV = true,
-    ESP = false
+-- Основное окно с автосохранением в файл perdoleAIM
+local Window = Rayfield:CreateWindow({
+   Name = "Perdole Suite v2",
+   LoadingTitle = "Загрузка систем...",
+   LoadingSubtitle = "by Gemini",
+   ConfigurationSaving = {
+      Enabled = true,
+      FolderName = "PerdoleScripts", 
+      FileName = "perdoleAIM" -- Тот самый файл
+   }
+})
+
+-- Настройки
+local Settings = {
+    AimbotEnabled = false,
+    SilentAim = true,
+    TeamCheck = true,
+    WallCheck = true,
+    FOV = 150,
+    VisualRay = true,
+    AntiAimEnabled = false,
+    TriggerBot = false,
 }
 
--- // СИСТЕМА ПОИСКА ЦЕЛИ //
-local function getTarget()
-    local best, dist = nil, CFG.MaxRadius
-    for _, p in pairs(Players:GetPlayers()) do
-        if p == LP or not p.Character or not p.Character:FindFirstChild(CFG.AimPart) then continue end
-        local part = p.Character[CFG.AimPart]
-        local screenPos, onScreen = Camera:WorldToScreenPoint(part.Position)
-        if onScreen then
-            local mDist = (Vector2.new(screenPos.X, screenPos.Y) - Vector2.new(Mouse.X, Mouse.Y)).Magnitude
-            if mDist < dist then
-                dist, best = mDist, part
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+local RunService = game:GetService("RunService")
+local Stats = game:GetService("Stats")
+
+--- СОЗДАНИЕ ПЛАВАЮЩЕГО HUD (FPS/ПИНГ/СТАТУС) ---
+local HudGui = Instance.new("ScreenGui", LocalPlayer:WaitForChild("PlayerGui"))
+HudGui.Name = "PerdoleHUD"
+
+local MainFrame = Instance.new("Frame", HudGui)
+MainFrame.Size = UDim2.new(0, 150, 0, 80)
+MainFrame.Position = UDim2.new(0, 50, 0.8, 0) -- Слева снизу
+MainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Draggable = true -- Делаем его передвигаемым
+
+local Corner = Instance.new("UICorner", MainFrame)
+local TextLabel = Instance.new("TextLabel", MainFrame)
+TextLabel.Size = UDim2.new(1, -10, 1, -10)
+TextLabel.Position = UDim2.new(0, 5, 0, 5)
+TextLabel.BackgroundTransparency = 1
+TextLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+TextLabel.TextSize = 14
+TextLabel.Font = Enum.Font.Code
+TextLabel.TextXAlignment = Enum.TextXAlignment.Left
+TextLabel.RichText = true
+
+--- ВИЗУАЛИЗАЦИЯ ЛИНИИ АИМБОТА ---
+local AimBeam = Instance.new("Part", workspace)
+AimBeam.Anchored = true
+AimBeam.CanCollide = false
+AimBeam.Transparency = 1
+local SelectionPart = Instance.new("BoxHandleAdornment", AimBeam)
+SelectionPart.Adornee = nil
+SelectionPart.AlwaysOnTop = true
+SelectionPart.ZIndex = 10
+SelectionPart.Size = Vector3.new(0.2, 0.2, 1)
+SelectionPart.Color3 = Color3.fromRGB(255, 0, 0)
+
+--- ЛОГИКА ОБНОВЛЕНИЯ ДАННЫХ ---
+local function GetClosestPlayer()
+    local closest = nil
+    local shortestDistance = math.huge
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+            if Settings.TeamCheck and player.Team == LocalPlayer.Team then continue end
+            
+            local pos, onScreen = Camera:WorldToViewportPoint(player.Character.HumanoidRootPart.Position)
+            if onScreen then
+                local distance = (Vector2.new(pos.X, pos.Y) - Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)).Magnitude
+                if distance < Settings.FOV and distance < shortestDistance then
+                    closest = player
+                    shortestDistance = distance
+                end
             end
         end
     end
-    return best
+    return closest
 end
 
--- // FOV CIRCLE (Безопасный метод) //
-local FOV = Drawing.new("Circle")
-FOV.Thickness = 1
-FOV.NumSides = 60
-FOV.Color = Color3.fromRGB(255, 105, 180)
-FOV.Filled = false
-
--- // ИНТЕРФЕЙС //
-local Window = Rayfield:CreateWindow({Name = "Fling Things | slrNova", LoadingTitle = "Loading..."})
-local Main = Window:CreateTab("Main")
-
-Main:CreateToggle({
-    Name = "Enable Aimlock (Cam)",
-    CurrentValue = CFG.AimEnabled,
-    Callback = function(v) CFG.AimEnabled = v end
-})
-
-Main:CreateToggle({
-    Name = "Silent Aim (Fling)",
-    CurrentValue = CFG.SilentAim,
-    Callback = function(v) CFG.SilentAim = v end
-})
-
-Main:CreateSlider({
-    Name = "FOV Radius", Range = {50, 500}, Increment = 5, CurrentValue = 150,
-    Callback = function(v) CFG.MaxRadius = v end
-})
-
-Main:CreateToggle({
-    Name = "Show FOV Circle",
-    CurrentValue = true,
-    Callback = function(v) CFG.ShowFOV = v end
-})
-
--- // ОСНОВНОЙ ЦИКЛ //
+-- Основной цикл
 RunService.RenderStepped:Connect(function()
-    -- Обновление круга
-    FOV.Visible = CFG.ShowFOV
-    FOV.Radius = CFG.MaxRadius
-    FOV.Position = Vector2.new(Mouse.X, Mouse.Y + 36)
-
-    local target = getTarget()
+    -- Обновление текста HUD
+    local fps = math.floor(1 / RunService.RenderStepped:Wait())
+    local ping = math.floor(Stats.Network.ServerStatsItem["Data Ping"]:GetValue())
+    local aimStatus = Settings.AimbotEnabled and "<font color='#00FF00'>ON</font>" or "<font color='#FF0000'>OFF</font>"
     
-    -- Обычный Aim (Доводит камеру)
-    if CFG.AimEnabled and UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
-        if target then
-            Camera.CFrame = Camera.CFrame:Lerp(CFrame.new(Camera.CFrame.Position, target.Position), 0.1)
-        end
-    end
+    TextLabel.Text = string.format(
+        "FPS: %d\nPING: %d ms\nAIMBOT: %s",
+        fps, ping, aimStatus
+    )
 
-    -- Silent Aim для Fling Things
-    -- Мы принудительно направляем вектор броска/захвата в сторону цели
-    if CFG.SilentAim and target then
-        local tool = LP.Character and LP.Character:FindFirstChildOfClass("Tool")
-        if tool then
-            -- Если держим цель, направляем её в таргет
-            local bodyPos = target.Parent:FindFirstChild("HumanoidRootPart")
-            if bodyPos and UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
-                -- Логика: если чит умеет менять Velocity предметов
-                -- (В этой игре Silent Aim работает как 'магнит' для броска)
-            end
+    -- Визуализация наводки
+    local target = GetClosestPlayer()
+    if Settings.AimbotEnabled and target and Settings.VisualRay then
+        local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            SelectionPart.Adornee = target.Character.HumanoidRootPart
+            SelectionPart.Visible = true
         end
+    else
+        SelectionPart.Visible = false
     end
 end)
 
--- // ESP //
-task.spawn(function()
-    while task.wait(1) do
-        for _, p in pairs(Players:GetPlayers()) do
-            if p ~= LP and p.Character then
-                local hl = p.Character:FindFirstChild("Highlight") or Instance.new("Highlight", p.Character)
-                hl.Enabled = CFG.ESP
-                hl.FillTransparency = 0.5
-                hl.OutlineColor = Color3.new(1, 1, 1)
-            end
-        end
-    end
-end)
+--- ТАБЫ И КНОПКИ ---
+local MainTab = Window:CreateTab("Combat", 4483362458)
 
-Rayfield:Notify({Title = "Ready", Content = "Fling Things Script Loaded!", Duration = 3})
+MainTab:CreateToggle({
+   Name = "Включить Aimbot",
+   CurrentValue = false,
+   Flag = "AimToggle", -- Флаг для сохранения
+   Callback = function(Value)
+      Settings.AimbotEnabled = Value
+   end,
+})
+
+MainTab:CreateToggle({
+   Name = "Показывать луч аимбота",
+   CurrentValue = true,
+   Flag = "VisualRay",
+   Callback = function(Value)
+      Settings.VisualRay = Value
+   end,
+})
+
+MainTab:CreateSlider({
+   Name = "FOV (Радиус наводки)",
+   Range = {0, 800},
+   Increment = 10,
+   Suffix = "px",
+   CurrentValue = 150,
+   Flag = "AimFOV",
+   Callback = function(Value)
+      Settings.FOV = Value
+   end,
+})
+
+-- Автозагрузка конфига
+Rayfield:LoadConfiguration()
+
